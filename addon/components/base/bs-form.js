@@ -31,6 +31,15 @@ import layout from 'ember-bootstrap/templates/components/bs-form';
   do e.g. model data normalization), then the available validation rules are evaluated, and if those fail, the `onInvalid`
   action is sent instead of `onSubmit`.
 
+  It is also possible to submit or validate the form directly by using the `validate` and `submit` actions on the yielded form.
+  For example, `{{bs-button defaultText="Validate" type="info" onClick=(action form.validate)}}` will validate the form, and
+  `<button {{action (action form.submit)}}>Submit</button>` will trigger `onSubmit`. If you need to support multiple submit buttons,
+  for example if you want to run different logic depending on which submit button was used to submit the form, it is possible to
+  override the `onSubmit` action using the `submit` action on the yielded form like so:
+  `{{bs-button defaultText="Submit and Close" type="primary" onClick=(action form.submit (action 'myCustomHandler'))}}`
+  This can be used to get form validation on a custom submit action without needing to run the validations yourself. The same validations
+  will run for all submit buttons, only the `onSubmit` is overriden to use a different action.
+
   ### Use with Components.FormElement
 
   When using `Components.FormElement`s with their `property` set to property names of the form's validation enabled
@@ -44,6 +53,7 @@ import layout from 'ember-bootstrap/templates/components/bs-form';
     {{form.element controlType="email" label="Email" placeholder="Email" property="email"}}
     {{form.element controlType="password" label="Password" placeholder="Password" property="password"}}
     {{form.element controlType="checkbox" label="Remember me" property="rememberMe"}}
+    {{bs-button defaultText="Validate" type="info" onClick=(action form.validate)}}
     {{bs-button defaultText="Submit" type="primary" buttonType="submit"}}
   {{/bs-form}}
   ```
@@ -208,6 +218,30 @@ export default Component.extend({
    */
   onInvalid(model, error) {}, // eslint-disable-line no-unused-vars
 
+  applyValidations(e, handler) {
+    if (e) {
+      e.preventDefault();
+    }
+
+    if (!handler) {
+      handler = this.get('onInvalid');
+    }
+
+    let model = this.get('model');
+    this.get('onBefore')(model);
+
+    let result = this.validate(this.get('model'));
+    if (result && result instanceof RSVP.Promise) {
+      return result
+        .catch((err) => {
+          this.set('showAllValidations', true);
+          handler(model, err);
+          return RSVP.Promise.reject(err);
+        });
+    }
+    return RSVP.Promise.resolve(result);
+  },
+
   /**
    * Submit handler that will send the default action ("action") to the controller when submitting the form.
    *
@@ -216,29 +250,28 @@ export default Component.extend({
    * all the `showValidation` property of all child `Components.FormElement`s will be set to true, so error state and
    * messages will be shown automatically.
    *
+   * Optionally it is possible to pass a handler as the second argument, and if present it will be used instead of
+   * the default "onSubmit" action handler. This makes it possible to handle submission of a form in different ways
+   * depending on which submit button was clicked.
+   *
    * @method submit
    * @private
    */
-  submit(e) {
+  submit(e, handler) {
     if (e) {
       e.preventDefault();
     }
+
+    if (!handler) {
+      handler = this.get('onSubmit');
+    }
+
     let model = this.get('model');
 
-    this.get('onBefore')(model);
-
     if (!this.get('hasValidator')) {
-      return this.get('onSubmit')(model);
+      return handler(model);
     } else {
-      let validationPromise = this.validate(this.get('model'));
-      if (validationPromise && validationPromise instanceof RSVP.Promise) {
-        validationPromise
-          .then((r) => this.get('onSubmit')(model, r))
-          .catch((err) => {
-            this.set('showAllValidations', true);
-            return this.get('onInvalid')(model, err);
-          });
-      }
+      return this.applyValidations().then((r) => handler(model, r));
     }
   },
 
@@ -261,6 +294,12 @@ export default Component.extend({
         isPresent(model) && isPresent(property)
       );
       set(model, property, value);
+    },
+    submit(handler) {
+      return this.submit(null, handler);
+    },
+    validate(handler) {
+      return this.applyValidations(null, handler);
     }
   }
 });
